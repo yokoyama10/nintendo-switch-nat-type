@@ -21,7 +21,7 @@ class Connection
 	def bind_remote(addition)
 		old_port = remote_sock&.local_address&.ip_port || 0
 		@remote_sock = UDPSocket.new
-		return if old_port == 0
+		old_port = Random.rand(20000...40000) if old_port == 0
 
 		port = old_port + addition
 		begin
