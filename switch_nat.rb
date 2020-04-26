@@ -18,6 +18,22 @@ class Connection
 		@local_sock.bind('0.0.0.0', @listen)
 	end
 
+	def bind_remote(addition)
+		old_port = remote_sock&.local_address&.ip_port || 0
+		@remote_sock = UDPSocket.new
+		return if old_port == 0
+
+		port = old_port + addition
+		begin
+			remote_sock.bind('0.0.0.0', port)
+		rescue Errno::EADDRINUSE => _
+		end
+
+		if port != remote_sock.local_address.ip_port
+			puts 'Warning: port bind failed. NAT type result may be changed.'
+		end
+	end
+
 	def send_local(data)
 		local_sock.send(data, 0, $from_addr, $from_port)
 	end
@@ -32,14 +48,16 @@ nncs2 = Connection.new(19925, Resolv.getaddress('nncs2-lp1.n.n.srv.nintendo.net'
 typea = Connection.new(50920, nncs1.destaddr, 50920)
 
 renew_remote = proc do
-	nncs1.remote_sock = UDPSocket.new
+	port_difference = Random.rand(1...10)
+	nncs1.bind_remote(port_difference)
 	typea.remote_sock = nncs1.remote_sock
-	nncs2.remote_sock =
-		if %i[A B].include?(TYPE)
-			nncs1.remote_sock
-		else
-			UDPSocket.new
-		end
+	if %i[A B].include?(TYPE)
+		nncs2.remote_sock = nncs1.remote_sock  # Endpoint-Independent Mapping
+	elsif TYPE == :C
+		nncs2.bind_remote(port_difference)  # port number difference is same to nncs1, predictable
+	else
+		nncs2.bind_remote(port_difference + 1)  # port number is unpredictable
+	end
 end
 
 renew_remote.call
@@ -52,6 +70,8 @@ loop do
 		data, from = s.recvfrom(65536)
 		if con.map(&:remote_sock).include?(s)
 			ff = con.select { |c| from[3] == c.destaddr && from[1] == c.destport }.first
+
+			# Type A NAT does not filter the packets from new port (50920)
 			if TYPE != :F && (ff != typea || TYPE == :A)
 				puts "forward from remote #{from[3]}:#{from[1]} to local"
 				ff.send_local(data)
@@ -65,9 +85,9 @@ loop do
 				$from_addr = from[3]
 				$from_port = from[1]
 
-				renew_remote.call unless TYPE == :C
+				renew_remote.call
 
-				# to open port
+				# open port 50920 to avoid Port-Dependent Filter
 				puts "say hi to #{typea.destaddr}:#{typea.destport}"
 				typea.send_remote('Hi')
 			end
